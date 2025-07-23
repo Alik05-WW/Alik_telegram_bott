@@ -60,9 +60,35 @@ def get_summary(text):
     return chat_ai(f"Сделай краткое изложение текста:\n{text[:4000]}")
 
 # === ОБРАБОТЧИКИ ===
-@bot.message_handler(commands=['start', 'help'])
+@bot.message_handler(commands=['start'])
 def start(message):
-    bot.reply_to(message, "Привет! Отправь мне PDF, и я сделаю краткое изложение.")
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add("Инфо", "Помощь")
+    bot.send_message(
+        message.chat.id,
+        "Привет! Отправь PDF, и я сделаю краткое изложение."
+        reply_markup=markup
+    )
+
+@bot.message_handler(commands=['help'])
+def help_command(message):
+    bot.send_message(
+        message.chat.id,
+        "Доступные команды:\n"
+        "/start - Приветствие и клавиатура\n"
+        "/help - Список команд\n"
+        "/info - Информация о пользователе\n"
+        "Отправь PDF — я сделаю краткое изложение.\n"
+        "Также можешь написать сообщение для общения с ИИ."
+    )
+
+@bot.message_handler(commands=['info'])
+def info_command(message):
+    bot.send_message(
+        message.chat.id,
+        f"Твой username: @{message.from_user.username}\n"
+        f"ID: {message.from_user.id}"
+    )
 
 @bot.message_handler(content_types=['document'])
 def handle_pdf(message):
@@ -82,6 +108,14 @@ def handle_pdf(message):
         bot.send_message(message.chat.id, "Ошибка: " + str(e))
     finally:
         os.remove(message.document.file_name)
+
+@bot.message_handler(func=lambda message: message.text.lower() == "инфо")
+def button_info(message):
+    info_command(message)
+
+@bot.message_handler(func=lambda message: message.text.lower() == "помощь")
+def button_help(message):
+    help_command(message)
 
 @bot.message_handler(func=lambda message: True)
 def chat_with_ai(message):

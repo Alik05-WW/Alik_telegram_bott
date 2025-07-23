@@ -23,7 +23,6 @@ def clean_response(text: str) -> str:
     return text.strip()
 
 def chat_ai(prompt):
-    """Запрос к API и возврат ответа."""
     headers = {
         "Content-Type": "application/json; charset=utf-8",
         "Authorization": f"Bearer {AI_API_KEY}"
@@ -39,14 +38,12 @@ def chat_ai(prompt):
         payload = json.dumps(data, ensure_ascii=False).encode('utf-8')
         response = requests.post(AI_URL, headers=headers, data=payload)
         result = response.json()
-        print("DEBUG API RESPONSE:", result)  # Лог для отладки
 
+        # Если нет choices, вернем весь ответ
         if "choices" in result and len(result["choices"]) > 0:
             return clean_response(result["choices"][0]["message"]["content"])
-        elif "error" in result:
-            return f"Ошибка API: {result['error']}"
         else:
-            return "Ошибка: пустой ответ от LLM"
+            return f"Ошибка LLM: {result}"
     except Exception as e:
         return f"Ошибка LLM: {e}"
 

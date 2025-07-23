@@ -1,5 +1,5 @@
 import telebot
-from telebot import types
+from flask import Flask, request
 import requests
 import fitz
 import os
@@ -8,113 +8,102 @@ import re
 
 # === КОНФИГ ===
 TELEGRAM_TOKEN = "8047539836:AAGuwECC3Ee53GI-QhBb_oACAZAneicb9Z0"
-AI_API_KEY = "io-v2-eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJvd25lciI6IjBlMjM5MDg5LWE4MTItNGFiYS05OWI1LTMyNjI5NGVjNzQ2MyIsImV4cCI6NDkwNjc2NDEwMH0.Gm1wXrIoo53lYABUz4rHg7l6rYPRhECMp5pLNVNqrPmiz13jVq6LWnvUu1xP9A7WHToIp4AJCfDHhhW3Oa1f1g"
+AI_API_KEY = "io-v2-eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."  # вставь полный API ключ
 AI_URL = "https://api.intelligence.io.solutions/api/v1/chat/completions"
+MODEL = "deepseek-ai/DeepSeek-R1-0528"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
+server = Flask(__name__)
 
 # === УТИЛИТЫ ===
 def clean_response(text: str) -> str:
-    """Удаляет <think> и внутренние комментарии."""
+    """Удаляет служебные теги и лишние скобки."""
     text = re.sub(r"</?think>", "", text)
-    text = re.sub(r"\([^)]*\)", "", text)  # удаляем текст в скобках
-    text = re.sub(r"\n{2,}", "\n", text)
-    text = re.sub(r" {2,}", " ", text)
+    text = re.sub(r"\([^)]*\)", "", text)
     return text.strip()
 
 def chat_ai(prompt):
+    """Запрос к API и возврат ответа."""
     headers = {
         "Content-Type": "application/json; charset=utf-8",
         "Authorization": f"Bearer {AI_API_KEY}"
     }
     data = {
-        "model": "deepseek-ai/DeepSeek-R1-0528",
+        "model": MODEL,
         "messages": [
-            {"role": "system", "content": "Ты умный Telegram-бот. Отвечай одним вариантом, без тегов <think>, без повторов и комментариев."},
+            {"role": "system", "content": "Отвечай одним абзацем, без тегов <think> и повторов."},
             {"role": "user", "content": prompt}
         ]
-        # max_tokens убрал, чтобы не резало ответ
     }
     try:
         payload = json.dumps(data, ensure_ascii=False).encode('utf-8')
         response = requests.post(AI_URL, headers=headers, data=payload)
-        response.encoding = 'utf-8'
         result = response.json()
-        content = result["choices"][0]["message"]["content"]
-        return clean_response(content)
+        print("DEBUG API RESPONSE:", result)  # Лог для отладки
+
+        if "choices" in result and len(result["choices"]) > 0:
+            return clean_response(result["choices"][0]["message"]["content"])
+        elif "error" in result:
+            return f"Ошибка API: {result['error']}"
+        else:
+            return "Ошибка: пустой ответ от LLM"
     except Exception as e:
         return f"Ошибка LLM: {e}"
 
-def get_pdf_pages(path):
-    """Возвращает текст по страницам PDF."""
+def get_pdf_text(path):
+    """Извлекает текст из PDF."""
+    text = ""
     doc = fitz.open(path)
-    return [page.get_text().strip() for page in doc]
+    for page in doc:
+        text += page.get_text()
+    return text
 
-def get_pdf_summary(pdf_path):
-    """Создает итоговое краткое изложение PDF."""
-    pages = get_pdf_pages(pdf_path)
-    summaries = []
+def get_summary(text):
+    """Краткое изложение текста."""
+    return chat_ai(f"Сделай краткое изложение текста:\n{text[:4000]}")
 
-    for i, text in enumerate(pages, 1):
-        summaries.append(
-            f"Страница {i}:\n" +
-            chat_ai(f"Сделай краткое изложение этой страницы (не более 4 предложений):\n\n{text}")
-        )
-
-    combined = "\n".join(summaries)
-    final_summary = chat_ai(f"Объедини эти краткие изложения страниц в одно резюме (5-7 предложений):\n\n{combined}")
-    return final_summary
-
-# === ОБРАБОТЧИКИ КОМАНД ===
-@bot.message_handler(commands=['start'])
+# === ОБРАБОТЧИКИ ===
+@bot.message_handler(commands=['start', 'help'])
 def start(message):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(types.KeyboardButton('Инфо'), types.KeyboardButton('Помощь'))
-    bot.send_message(message.chat.id, f"Привет, {message.from_user.first_name}!\nОтправь PDF для краткого изложения.", reply_markup=markup)
+    bot.reply_to(message, "Привет! Отправь мне PDF, и я сделаю краткое изложение.")
 
-@bot.message_handler(commands=['info'])
-def info(message):
-    bot.send_message(message.chat.id, f"Твой username: @{message.from_user.username}\nID: {message.from_user.id}")
-
-@bot.message_handler(commands=['help'])
-def help_command(message):
-    bot.send_message(message.chat.id, "Доступные команды:\n/start\n/info\n/help\nОтправь PDF — я сделаю краткое изложение.")
-
-# === ОБРАБОТКА PDF ===
 @bot.message_handler(content_types=['document'])
 def handle_pdf(message):
     if not message.document.file_name.lower().endswith('.pdf'):
-        bot.send_message(message.chat.id, "Пожалуйста, отправь PDF файл.")
+        bot.send_message(message.chat.id, "Отправь PDF файл.")
         return
-
     file_info = bot.get_file(message.document.file_id)
     downloaded_file = bot.download_file(file_info.file_path)
-
     with open(message.document.file_name, "wb") as f:
         f.write(downloaded_file)
-
     try:
-        bot.send_message(message.chat.id, "Обрабатываю PDF, подожди пару секунд...")
-        summary = get_pdf_summary(message.document.file_name)
+        bot.send_message(message.chat.id, "Обрабатываю PDF...")
+        text = get_pdf_text(message.document.file_name)
+        summary = get_summary(text)
         bot.send_message(message.chat.id, "Краткое изложение:\n" + summary)
     except Exception as e:
         bot.send_message(message.chat.id, "Ошибка: " + str(e))
     finally:
         os.remove(message.document.file_name)
 
-# === ОБРАБОТКА КНОПОК ===
-@bot.message_handler(func=lambda m: m.text == "Инфо")
-def button_info(message):
-    info(message)
-
-@bot.message_handler(func=lambda m: m.text == "Помощь")
-def button_help(message):
-    help_command(message)
-
-# === ЧАТ С LLM ===
 @bot.message_handler(func=lambda message: True)
 def chat_with_ai(message):
-    answer = chat_ai(message.text)
-    bot.send_message(message.chat.id, answer)
+    bot.send_message(message.chat.id, chat_ai(message.text))
 
-bot.polling(non_stop=True)
+# === FLASK WEBHOOK ===
+@server.route(f'/{TELEGRAM_TOKEN}', methods=['POST'])
+def webhook():
+    update = telebot.types.Update.de_json(request.stream.read().decode('utf-8'))
+    bot.process_new_updates([update])
+    return "ok", 200
+
+@server.route("/")
+def home():
+    return "Бот работает!", 200
+
+if __name__ == "__main__":
+    # Webhook для Render
+    bot.remove_webhook()
+    bot.set_webhook(url=f"https://alik-telegram-bott.onrender.com/{TELEGRAM_TOKEN}")
+    port = int(os.environ.get('PORT', 10000))
+    server.run(host="0.0.0.0", port=port)
